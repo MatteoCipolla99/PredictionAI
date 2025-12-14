@@ -14,15 +14,31 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [subscription, setSubscription] = useState("free");
+  const [dailyAnalysisCount, setDailyAnalysisCount] = useState(0);
+  const [lastResetDate, setLastResetDate] = useState(new Date().toDateString());
 
   useEffect(() => {
     // Carica user da localStorage
     const savedUser = localStorage.getItem("user");
     const savedSubscription = localStorage.getItem("subscription");
+    const savedCount = localStorage.getItem("dailyAnalysisCount");
+    const savedResetDate = localStorage.getItem("lastResetDate");
+
     if (savedUser) {
       setUser(JSON.parse(savedUser));
       setSubscription(savedSubscription || "free");
     }
+
+    // Reset conteggio giornaliero
+    const today = new Date().toDateString();
+    if (savedResetDate !== today) {
+      setDailyAnalysisCount(0);
+      localStorage.setItem("lastResetDate", today);
+      localStorage.setItem("dailyAnalysisCount", "0");
+    } else {
+      setDailyAnalysisCount(Number(savedCount) || 0);
+    }
+
     setLoading(false);
   }, []);
 
@@ -66,8 +82,10 @@ export const AuthProvider = ({ children }) => {
   const logout = () => {
     setUser(null);
     setSubscription("free");
+    setDailyAnalysisCount(0);
     localStorage.removeItem("user");
     localStorage.removeItem("subscription");
+    localStorage.removeItem("dailyAnalysisCount");
   };
 
   const upgradeToPremium = () => {
@@ -75,14 +93,34 @@ export const AuthProvider = ({ children }) => {
     localStorage.setItem("subscription", "premium");
   };
 
+  const incrementAnalysisCount = () => {
+    const newCount = dailyAnalysisCount + 1;
+    setDailyAnalysisCount(newCount);
+    localStorage.setItem("dailyAnalysisCount", newCount.toString());
+  };
+
+  const canUseAnalysis = () => {
+    if (subscription === "premium") return true;
+    return dailyAnalysisCount < 5;
+  };
+
+  const getRemainingAnalyses = () => {
+    if (subscription === "premium") return "Illimitate";
+    return Math.max(0, 5 - dailyAnalysisCount);
+  };
+
   const value = {
     user,
     loading,
     subscription,
+    dailyAnalysisCount,
     login,
     register,
     logout,
     upgradeToPremium,
+    incrementAnalysisCount,
+    canUseAnalysis,
+    getRemainingAnalyses,
     isPremium: subscription === "premium",
   };
 
