@@ -1,11 +1,43 @@
 import { useState, useCallback } from "react";
 
+// CONFIGURAZIONE PROXY (Il browser chiama /api, Vite chiama il server vero)
 const API_CONFIG = {
-  baseUrl: "https://api-football-v1.p.rapidapi.com/v3",
+  baseUrl: "/api", // <--- ORA PUNTA AL NOSTRO PROXY LOCALE
   headers: {
-    "X-RapidAPI-Key": import.meta.env.VITE_RAPIDAPI_KEY,
-    "X-RapidAPI-Host": import.meta.env.VITE_RAPIDAPI_HOST,
+    // LA TUA CHIAVE:
+    "X-Auth-Token": "85f4e8009ca44155a30d5ec5944ae943",
   },
+};
+
+const LEAGUE_MAP = {
+  135: "SA", // Serie A
+  39: "PL", // Premier League
+  140: "PD", // La Liga
+  78: "BL1", // Bundesliga
+  61: "FL1", // Ligue 1
+  2: "CL", // Champions League
+};
+
+const calculateSyntheticOdds = (homeRank, awayRank) => {
+  let home = 2.5,
+    draw = 3.2,
+    away = 2.5;
+  if (!homeRank || !awayRank)
+    return { home: "2.50", draw: "3.20", away: "2.50" };
+  const rankDiff = awayRank - homeRank;
+  if (rankDiff > 0) {
+    home = Math.max(1.1, 2.5 - rankDiff * 0.1);
+    away = Math.min(15.0, 2.5 + rankDiff * 0.15);
+  } else {
+    away = Math.max(1.1, 2.5 - Math.abs(rankDiff) * 0.1);
+    home = Math.min(15.0, 2.5 + Math.abs(rankDiff) * 0.15);
+  }
+  draw = Math.max(2.8, (home + away) / 2 + 0.5);
+  return {
+    home: home.toFixed(2),
+    draw: draw.toFixed(2),
+    away: away.toFixed(2),
+  };
 };
 
 export const useFootballAPI = () => {
@@ -14,325 +46,168 @@ export const useFootballAPI = () => {
   const [lastUpdate, setLastUpdate] = useState(null);
   const [error, setError] = useState(null);
 
-  // Test connessione API
   const testConnection = useCallback(async () => {
     try {
-      const response = await fetch(`${API_CONFIG.baseUrl}/status`, {
+      const response = await fetch(`${API_CONFIG.baseUrl}/competitions`, {
         headers: API_CONFIG.headers,
       });
-      const data = await response.json();
-      if (response.ok && data.response) {
+      if (response.ok) {
         setApiConnected(true);
-        return { success: true, data: data.response };
+        return { success: true };
       }
-      setApiConnected(false);
       return { success: false };
     } catch (err) {
-      setApiConnected(false);
       return { success: false, error: err.message };
     }
   }, []);
 
-  // Fetch partite per lega e data
-  const fetchMatches = useCallback(async (leagueId, date = null) => {
+  const fetchStandings = useCallback(async (leagueId) => {
     setLoading(true);
-    setError(null);
+    const code = LEAGUE_MAP[leagueId] || "SA";
+
     try {
+      const response = await fetch(
+        `${API_CONFIG.baseUrl}/competitions/${code}/standings`,
+        { headers: API_CONFIG.headers }
+      );
+
+      const data = await response.json();
+
+      if (data.errorCode) {
+        console.error("API Error:", data.message);
+        return { success: false, error: data.message };
+      }
+
+      if (data.standings && data.standings.length > 0) {
+        const table = data.standings[0].table.map((item) => ({
+          rank: item.position,
+          team: {
+            id: item.team.id,
+            name: item.team.shortName || item.team.name,
+            logo: item.team.crest,
+          },
+          points: item.points,
+          form: item.form ? item.form.replace(/,/g, "") : "?????",
+          goalsDiff: item.goalDifference,
+          all: {
+            played: item.playedGames,
+            win: item.won,
+            draw: item.draw,
+            lose: item.lost,
+            goals: { for: item.goalsFor, against: item.goalsAgainst },
+          },
+        }));
+        return { success: true, data: table };
+      }
+      return { success: false, data: [] };
+    } catch (err) {
+      console.error("Fetch Standings Error:", err);
+      return { success: false, error: err.message };
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const fetchMatches = useCallback(
+    async (leagueId, date = null, standings = []) => {
+      setLoading(true);
+      const code = LEAGUE_MAP[leagueId] || "SA";
       const targetDate = date || new Date().toISOString().split("T")[0];
-      const url = `${API_CONFIG.baseUrl}/fixtures?date=${targetDate}&league=${leagueId}&season=2024&timezone=Europe/Rome`;
 
-      const response = await fetch(url, { headers: API_CONFIG.headers });
+      try {
+        // Usiamo il proxy /api invece dell'URL completo
+        const url = `${API_CONFIG.baseUrl}/competitions/${code}/matches?dateFrom=${targetDate}&dateTo=${targetDate}`;
+        console.log(`Chiamata API (via Proxy): ${url}`);
 
-      if (response.ok) {
+        const response = await fetch(url, { headers: API_CONFIG.headers });
         const data = await response.json();
-        if (data.response && data.response.length > 0) {
-          const formattedMatches = data.response.map((fixture) => ({
-            id: fixture.fixture.id,
-            home: fixture.teams.home.name,
-            away: fixture.teams.away.name,
-            homeId: fixture.teams.home.id,
-            awayId: fixture.teams.away.id,
-            homeLogo: fixture.teams.home.logo,
-            awayLogo: fixture.teams.away.logo,
-            leagueName: fixture.league.name,
-            leagueId: fixture.league.id,
-            leagueLogo: fixture.league.logo,
-            time: new Date(fixture.fixture.date).toLocaleTimeString("it-IT", {
-              hour: "2-digit",
-              minute: "2-digit",
-            }),
-            date: fixture.fixture.date,
-            timestamp: fixture.fixture.timestamp,
-            status: fixture.fixture.status.short,
-            statusLong: fixture.fixture.status.long,
-            venue: fixture.fixture.venue.name,
-            city: fixture.fixture.venue.city,
-            referee: fixture.fixture.referee,
-            homeScore: fixture.goals.home,
-            awayScore: fixture.goals.away,
-            // Statistiche reali se disponibili
-            homeOdds:
-              fixture.odds?.home || (Math.random() * 2 + 1.5).toFixed(2),
-            drawOdds:
-              fixture.odds?.draw || (Math.random() * 1.5 + 2.8).toFixed(2),
-            awayOdds: fixture.odds?.away || (Math.random() * 2 + 2).toFixed(2),
-            aiPrediction: Math.random() > 0.5 ? "Casa" : "Trasferta",
-            confidence: Math.floor(Math.random() * 20 + 65),
-            stats: {
-              homeForm: Math.floor(Math.random() * 30 + 70),
-              awayForm: Math.floor(Math.random() * 30 + 70),
-              h2h: ["60% Casa", "45% Pareggi", "55% Casa"][
-                Math.floor(Math.random() * 3)
-              ],
-            },
-          }));
+
+        if (data.errorCode) {
+          if (data.errorCode === 429)
+            return {
+              success: false,
+              error: "Troppe richieste (attendi 1 min)",
+            };
+          return { success: false, error: data.message };
+        }
+
+        if (data.matches) {
           setApiConnected(true);
-          setLastUpdate(new Date());
+          const formattedMatches = data.matches.map((match) => {
+            const homeRank = standings.find(
+              (s) => s.team.id === match.homeTeam.id
+            );
+            const awayRank = standings.find(
+              (s) => s.team.id === match.awayTeam.id
+            );
+            const odds = calculateSyntheticOdds(homeRank?.rank, awayRank?.rank);
+
+            return {
+              id: match.id,
+              home: match.homeTeam.shortName || match.homeTeam.name,
+              away: match.awayTeam.shortName || match.awayTeam.name,
+              homeId: match.homeTeam.id,
+              awayId: match.awayTeam.id,
+              homeLogo: match.homeTeam.crest,
+              awayLogo: match.awayTeam.crest,
+              leagueName: match.competition.name,
+              leagueId: leagueId,
+              time: new Date(match.utcDate).toLocaleTimeString("it-IT", {
+                hour: "2-digit",
+                minute: "2-digit",
+              }),
+              status: mapStatus(match.status),
+              statusLong: match.status,
+              venue: "Stadio Standard",
+              homeScore: match.score.fullTime.home,
+              awayScore: match.score.fullTime.away,
+              homeOdds: odds.home,
+              drawOdds: odds.draw,
+              awayOdds: odds.away,
+              stats: {
+                homeForm: homeRank ? calculateFormScore(homeRank.form) : 50,
+                awayForm: awayRank ? calculateFormScore(awayRank.form) : 50,
+                homePoints: homeRank?.points || 0,
+                awayPoints: awayRank?.points || 0,
+              },
+            };
+          });
           return { success: true, data: formattedMatches };
         }
         return { success: true, data: [] };
-      }
-      throw new Error(`API Error: ${response.status}`);
-    } catch (err) {
-      console.error("Errore fetch matches:", err);
-      setError(err.message);
-      setApiConnected(false);
-      return { success: false, error: err.message };
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // Fetch classifica
-  const fetchStandings = useCallback(async (leagueId, season = 2024) => {
-    setLoading(true);
-    try {
-      const response = await fetch(
-        `${API_CONFIG.baseUrl}/standings?season=${season}&league=${leagueId}`,
-        { headers: API_CONFIG.headers }
-      );
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data.response && data.response.length > 0) {
-          const standings = data.response[0].league.standings[0];
-          return { success: true, data: standings };
-        }
-      }
-      return { success: false, data: [] };
-    } catch (err) {
-      console.error("Errore fetch standings:", err);
-      setError(err.message);
-      return { success: false, error: err.message };
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // Fetch partite live
-  const fetchLiveMatches = useCallback(async () => {
-    try {
-      const response = await fetch(`${API_CONFIG.baseUrl}/fixtures?live=all`, {
-        headers: API_CONFIG.headers,
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data.response && data.response.length > 0) {
-          const formattedLive = data.response.map((fixture) => ({
-            id: fixture.fixture.id,
-            home: fixture.teams.home.name,
-            away: fixture.teams.away.name,
-            homeLogo: fixture.teams.home.logo,
-            awayLogo: fixture.teams.away.logo,
-            homeScore: fixture.goals.home || 0,
-            awayScore: fixture.goals.away || 0,
-            time: fixture.fixture.status.elapsed || 0,
-            status: fixture.fixture.status.short,
-            statusLong: fixture.fixture.status.long,
-            leagueName: fixture.league.name,
-            leagueLogo: fixture.league.logo,
-          }));
-          setApiConnected(true);
-          return { success: true, data: formattedLive };
-        }
-        return { success: true, data: [] };
-      }
-      return { success: false, data: [] };
-    } catch (err) {
-      console.error("Errore fetch live:", err);
-      return { success: false, error: err.message };
-    }
-  }, []);
-
-  // Fetch H2H (Scontri Diretti)
-  const fetchH2H = useCallback(async (team1Id, team2Id) => {
-    setLoading(true);
-    try {
-      const response = await fetch(
-        `${API_CONFIG.baseUrl}/fixtures/headtohead?h2h=${team1Id}-${team2Id}&last=15`,
-        { headers: API_CONFIG.headers }
-      );
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data.response && data.response.length > 0) {
-          const matches = data.response;
-          const team1Wins = matches.filter(
-            (m) =>
-              (m.teams.home.id === team1Id && m.goals.home > m.goals.away) ||
-              (m.teams.away.id === team1Id && m.goals.away > m.goals.home)
-          ).length;
-
-          const team2Wins = matches.filter(
-            (m) =>
-              (m.teams.home.id === team2Id && m.goals.home > m.goals.away) ||
-              (m.teams.away.id === team2Id && m.goals.away > m.goals.home)
-          ).length;
-
-          const draws = matches.filter(
-            (m) => m.goals.home === m.goals.away
-          ).length;
-
-          let totalGoals = 0,
-            over25 = 0,
-            btts = 0;
-          matches.forEach((m) => {
-            const total = m.goals.home + m.goals.away;
-            totalGoals += total;
-            if (total > 2.5) over25++;
-            if (m.goals.home > 0 && m.goals.away > 0) btts++;
-          });
-
-          return {
-            success: true,
-            data: {
-              totalMatches: matches.length,
-              team1Wins,
-              team2Wins,
-              draws,
-              team1WinPercentage: ((team1Wins / matches.length) * 100).toFixed(
-                1
-              ),
-              team2WinPercentage: ((team2Wins / matches.length) * 100).toFixed(
-                1
-              ),
-              drawPercentage: ((draws / matches.length) * 100).toFixed(1),
-              avgGoals: (totalGoals / matches.length).toFixed(2),
-              over25Percentage: ((over25 / matches.length) * 100).toFixed(1),
-              bttsPercentage: ((btts / matches.length) * 100).toFixed(1),
-              lastMatches: matches.slice(0, 5).map((m) => ({
-                date: new Date(m.fixture.date).toLocaleDateString("it-IT"),
-                homeTeam: m.teams.home.name,
-                awayTeam: m.teams.away.name,
-                homeScore: m.goals.home,
-                awayScore: m.goals.away,
-                winner:
-                  m.goals.home > m.goals.away
-                    ? "home"
-                    : m.goals.away > m.goals.home
-                    ? "away"
-                    : "draw",
-              })),
-            },
-          };
-        }
-      }
-      return { success: false };
-    } catch (err) {
-      console.error("Errore fetch H2H:", err);
-      setError(err.message);
-      return { success: false, error: err.message };
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // Fetch statistiche squadra
-  const fetchTeamStats = useCallback(
-    async (teamId, leagueId, season = 2024) => {
-      try {
-        const response = await fetch(
-          `${API_CONFIG.baseUrl}/teams/statistics?season=${season}&team=${teamId}&league=${leagueId}`,
-          { headers: API_CONFIG.headers }
-        );
-
-        if (response.ok) {
-          const data = await response.json();
-          if (data.response) {
-            return { success: true, data: data.response };
-          }
-        }
-        return { success: false };
       } catch (err) {
-        console.error("Errore fetch team stats:", err);
+        console.error("API Fetch Error:", err);
         return { success: false, error: err.message };
+      } finally {
+        setLoading(false);
       }
     },
     []
   );
 
-  // Fetch odds per una partita
-  const fetchOdds = useCallback(async (fixtureId) => {
-    try {
-      const response = await fetch(
-        `${API_CONFIG.baseUrl}/odds?fixture=${fixtureId}`,
-        { headers: API_CONFIG.headers }
-      );
+  const mapStatus = (status) => {
+    if (status === "TIMED" || status === "SCHEDULED") return "NS";
+    if (status === "IN_PLAY") return "LIVE";
+    if (status === "PAUSED") return "HT";
+    if (status === "FINISHED") return "FT";
+    return status;
+  };
 
-      if (response.ok) {
-        const data = await response.json();
-        if (data.response && data.response.length > 0) {
-          return { success: true, data: data.response[0] };
-        }
-      }
-      return { success: false };
-    } catch (err) {
-      console.error("Errore fetch odds:", err);
-      return { success: false, error: err.message };
-    }
+  const calculateFormScore = (formString) => {
+    if (!formString) return 50;
+    const scores = { W: 20, D: 10, L: 0 };
+    let total = 0;
+    const matches = formString.replace(/,/g, "").split("").slice(-5);
+    matches.forEach((char) => (total += scores[char] || 10));
+    return total;
+  };
+
+  const fetchLiveMatches = useCallback(async () => {
+    return { success: true, data: [] };
   }, []);
 
-  // Fetch predizioni
-  const fetchPredictions = useCallback(async (fixtureId) => {
-    try {
-      const response = await fetch(
-        `${API_CONFIG.baseUrl}/predictions?fixture=${fixtureId}`,
-        { headers: API_CONFIG.headers }
-      );
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data.response && data.response.length > 0) {
-          return { success: true, data: data.response[0] };
-        }
-      }
-      return { success: false };
-    } catch (err) {
-      console.error("Errore fetch predictions:", err);
-      return { success: false, error: err.message };
-    }
-  }, []);
-
-  // Fetch top scorers
-  const fetchTopScorers = useCallback(async (leagueId, season = 2024) => {
-    try {
-      const response = await fetch(
-        `${API_CONFIG.baseUrl}/players/topscorers?season=${season}&league=${leagueId}`,
-        { headers: API_CONFIG.headers }
-      );
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data.response) {
-          return { success: true, data: data.response };
-        }
-      }
-      return { success: false };
-    } catch (err) {
-      console.error("Errore fetch top scorers:", err);
-      return { success: false, error: err.message };
-    }
+  const fetchH2H = useCallback(async (team1Id, team2Id) => {
+    return { success: false };
   }, []);
 
   return {
@@ -345,10 +220,6 @@ export const useFootballAPI = () => {
     fetchStandings,
     fetchLiveMatches,
     fetchH2H,
-    fetchTeamStats,
-    fetchOdds,
-    fetchPredictions,
-    fetchTopScorers,
   };
 };
 
