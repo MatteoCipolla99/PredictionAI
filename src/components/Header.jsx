@@ -3,12 +3,12 @@ import {
   BarChart3,
   Crown,
   Bell,
-  Settings,
   X,
   CheckCircle,
   AlertCircle,
 } from "lucide-react";
 import UserProfile from "../context/UserProfile";
+import { ThemeSwitch } from "./ThemeToggle";
 
 const Header = ({
   auth,
@@ -18,7 +18,6 @@ const Header = ({
   apiConnected,
 }) => {
   const [showNotifications, setShowNotifications] = useState(false);
-
   const unreadCount = notifications.filter((n) => !n.read).length;
 
   const getNotificationIcon = (type) => {
@@ -36,7 +35,6 @@ const Header = ({
     <header className="border-b border-blue-800/30 backdrop-blur-sm bg-slate-900/50 sticky top-0 z-50">
       <div className="max-w-7xl mx-auto px-4 py-4">
         <div className="flex items-center justify-between">
-          {/* Logo */}
           <div className="flex items-center gap-3">
             <div className="bg-gradient-to-br from-blue-500 to-purple-600 p-2 rounded-xl">
               <BarChart3 className="w-8 h-8" />
@@ -46,7 +44,7 @@ const Header = ({
                 StatsCalcio AI Pro
               </h1>
               <div className="flex items-center gap-2 text-xs text-gray-400">
-                <span>Analisi Professionale con AI</span>
+                <span>Analisi Professionale</span>
                 <span className="flex items-center gap-1">
                   <span
                     className={`w-2 h-2 rounded-full ${
@@ -59,11 +57,11 @@ const Header = ({
             </div>
           </div>
 
-          {/* Actions */}
           <div className="flex items-center gap-4">
+            <ThemeSwitch />
+
             {auth.user ? (
               <>
-                {/* Analysis Counter */}
                 {!auth.isPremium && (
                   <div className="hidden md:flex items-center gap-2 px-3 py-2 bg-slate-800/50 border border-blue-700/30 rounded-lg">
                     <span className="text-xs text-gray-400">Analisi oggi:</span>
@@ -73,7 +71,6 @@ const Header = ({
                   </div>
                 )}
 
-                {/* Notifications */}
                 <div className="relative">
                   <button
                     onClick={() => setShowNotifications(!showNotifications)}
@@ -149,7 +146,6 @@ const Header = ({
                   )}
                 </div>
 
-                {/* Premium Button */}
                 {!auth.isPremium && (
                   <button
                     onClick={onOpenPremium}
@@ -160,7 +156,6 @@ const Header = ({
                   </button>
                 )}
 
-                {/* User Profile */}
                 <UserProfile
                   user={auth.user}
                   subscription={auth.subscription}

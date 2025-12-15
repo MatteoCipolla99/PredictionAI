@@ -7,10 +7,12 @@ import {
   DownloadCloud,
   CheckCircle,
   AlertCircle,
+  Filter,
 } from "lucide-react";
 import { useAuth } from "./context/AuthContext";
 import { useFootballAPI } from "./hooks/useFootballAPI";
 import { useGenerativeAI } from "./hooks/useGenerativeAI";
+import { useFavorites } from "./components/FavoritesWatchlist";
 
 import Header from "./components/Header";
 import NavigationTabs from "./components/NavigationTabs";
@@ -26,6 +28,11 @@ import AdvancedH2H from "./components/AdvancedH2H";
 import Footer from "./components/Footer";
 import AuthModal from "./context/AuthModal";
 import PremiumModal from "./context/PremiumModal";
+import AdvancedFilters from "./components/AdvancedFilters";
+import FavoritesWatchlist from "./components/FavoritesWatchlist";
+import BettingTracker from "./components/BettingTraker";
+import AnalysisHistory from "./components/AnalysisHistory";
+import KellyValueCalculator from "./components/KellyValueCalculator";
 
 const FootballStatsAI = () => {
   const [activeTab, setActiveTab] = useState("matches");
@@ -37,6 +44,7 @@ const FootballStatsAI = () => {
   const [notifications, setNotifications] = useState([]);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showPremiumModal, setShowPremiumModal] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
 
   // Stati per l'Analisi AI
   const [aiAnalyzing, setAiAnalyzing] = useState(false);
@@ -46,6 +54,7 @@ const FootballStatsAI = () => {
   const [loadingH2h, setLoadingH2h] = useState(false);
 
   const [searchTerm, setSearchTerm] = useState("");
+  const [activeFilters, setActiveFilters] = useState(null);
   const [dataLoaded, setDataLoaded] = useState(false);
   const [isLoadingData, setIsLoadingData] = useState(false);
 
@@ -58,22 +67,19 @@ const FootballStatsAI = () => {
   const api = useFootballAPI();
   const genAI = useGenerativeAI();
 
+  // Hook favoriti collegato all'utente corrente
+  const { toggleFavorite, isFavorite } = useFavorites(auth.user?.id || "guest");
+
   // Test connessione API all'avvio
   useEffect(() => {
     api.testConnection();
   }, []);
 
   const loadData = async () => {
-    // Previeni chiamate duplicate
-    if (loadingRef.current) {
-      console.log("⏸️ Caricamento già in corso, salto...");
-      return;
-    }
+    if (loadingRef.current) return;
 
     const dateStr = currentDate.toISOString().split("T")[0];
-    const leagueKey = `${selectedLeague}-${dateStr}`;
 
-    // Se abbiamo già caricato questi dati, saltiamo
     if (
       lastLoadedDateRef.current === dateStr &&
       lastLoadedLeagueRef.current === selectedLeague
@@ -87,20 +93,15 @@ const FootballStatsAI = () => {
     setDataLoaded(false);
 
     try {
-      console.log(
-        `📡 Caricamento dati per ${selectedLeague} del ${dateStr}...`
-      );
-
       // 1. Carica classifica
       const standingsResult = await fetchStandings();
 
       // 2. Carica partite con classifica
       await fetchMatches(standingsResult);
 
-      // 3. Carica live (sempre vuoto per free tier)
+      // 3. Carica live
       await fetchLiveMatches();
 
-      // Segna come caricato
       lastLoadedDateRef.current = dateStr;
       lastLoadedLeagueRef.current = selectedLeague;
       setDataLoaded(true);
@@ -129,9 +130,7 @@ const FootballStatsAI = () => {
 
     if (result.success) {
       setMatches(result.data);
-      console.log(`✅ ${result.data.length} partite caricate`);
     } else {
-      console.log("⚠️ Nessuna partita o errore API:", result.error);
       setMatches([]);
     }
   };
@@ -140,10 +139,8 @@ const FootballStatsAI = () => {
     const result = await api.fetchStandings(selectedLeague);
     if (result.success && result.data.length > 0) {
       setStandings(result.data);
-      console.log(`✅ Classifica caricata: ${result.data.length} squadre`);
       return result.data;
     } else {
-      console.log("⚠️ Classifica non disponibile");
       setStandings([]);
       return [];
     }
@@ -159,20 +156,16 @@ const FootballStatsAI = () => {
     const newDate = new Date(currentDate);
     newDate.setDate(newDate.getDate() + days);
     setCurrentDate(newDate);
-    // Reset dati quando cambia data
     setDataLoaded(false);
   };
 
-  // Reset quando cambia lega
   useEffect(() => {
     setDataLoaded(false);
     setMatches([]);
     setStandings([]);
   }, [selectedLeague]);
 
-  // --- CUORE DELL'INTEGRAZIONE AI ---
   const handleAnalyze = async (match) => {
-    // 1. Controllo permessi
     if (!auth.canUseAnalysis()) {
       addNotification("warning", "Limite Raggiunto", "Passa a Premium!");
       setShowPremiumModal(true);
@@ -181,13 +174,10 @@ const FootballStatsAI = () => {
 
     auth.incrementAnalysisCount();
     setSelectedMatch(match);
-
-    // Mostriamo lo stato di caricamento
     setAiAnalyzing(true);
     setLoadingH2h(true);
 
     try {
-      // 2. Recuperiamo i dati H2H
       let h2hResult = null;
       const h2hResponse = await api.fetchH2H(match.homeId, match.awayId);
       if (h2hResponse.success) {
@@ -196,11 +186,37 @@ const FootballStatsAI = () => {
       setH2hData(h2hResult);
       setLoadingH2h(false);
 
-      // 3. CHIAMATA A GEMINI AI
       const aiResult = await genAI.generatePrediction(match, h2hResult);
-
-      // 4. Combiniamo tutto per mostrarlo a schermo
       setAiAnalysis(aiResult);
+
+      // Salva nello storico se l'utente è loggato
+      if (auth.user) {
+        const historyItem = {
+          home: match.home,
+          away: match.away,
+          leagueName: match.leagueName,
+          leagueId: selectedLeague,
+          prediction: aiResult.aiPrediction,
+          confidence: aiResult.confidence,
+          odds: match.homeOdds, // salviamo una quota di riferimento
+          stake: 10, // valore default per calcoli ROI
+        };
+        // Salvataggio manuale nello storage gestito da AnalysisHistory
+        const key = `analysis_history_${auth.user.id}`;
+        const existing = JSON.parse(localStorage.getItem(key) || "[]");
+        localStorage.setItem(
+          key,
+          JSON.stringify([
+            {
+              id: Date.now(),
+              timestamp: new Date().toISOString(),
+              ...historyItem,
+              outcome: "pending",
+            },
+            ...existing,
+          ])
+        );
+      }
 
       addNotification(
         "success",
@@ -208,12 +224,8 @@ const FootballStatsAI = () => {
         `Pronostico generato per ${match.home} vs ${match.away}`
       );
     } catch (error) {
-      console.error("Errore durante l'analisi:", error);
-      addNotification(
-        "error",
-        "Errore Analisi",
-        "Si è verificato un errore. Riprova."
-      );
+      console.error("Errore analisi:", error);
+      addNotification("error", "Errore Analisi", "Si è verificato un errore.");
       setAiAnalyzing(false);
       setLoadingH2h(false);
     } finally {
@@ -240,12 +252,32 @@ const FootballStatsAI = () => {
     );
   };
 
-  const filteredMatches = matches.filter(
-    (match) =>
-      searchTerm === "" ||
-      match.home.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      match.away.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const applyFilters = (match) => {
+    if (!activeFilters) return true;
+
+    // Filtro testo
+    if (
+      searchTerm &&
+      !match.home.toLowerCase().includes(searchTerm.toLowerCase()) &&
+      !match.away.toLowerCase().includes(searchTerm.toLowerCase())
+    ) {
+      return false;
+    }
+
+    // Filtri avanzati
+    if (activeFilters.oddsRange) {
+      const matchOdds = parseFloat(match.homeOdds) || 0;
+      if (
+        matchOdds < activeFilters.oddsRange.min ||
+        matchOdds > activeFilters.oddsRange.max
+      )
+        return false;
+    }
+
+    return true;
+  };
+
+  const filteredMatches = matches.filter(applyFilters);
 
   const formattedDate = currentDate.toLocaleDateString("it-IT", {
     weekday: "long",
@@ -254,7 +286,7 @@ const FootballStatsAI = () => {
   });
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-blue-950 to-slate-900 text-white">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-blue-950 to-slate-900 text-white font-sans">
       <Header
         auth={auth}
         notifications={notifications}
@@ -264,7 +296,6 @@ const FootballStatsAI = () => {
       />
 
       <div className="max-w-7xl mx-auto px-4 py-6">
-        {/* Barra di Controllo API */}
         <div className="mb-6 flex flex-col md:flex-row gap-4 justify-between items-center bg-slate-900/50 p-4 rounded-xl border border-blue-800/30">
           <div className="flex items-center gap-4">
             {!api.apiConnected ? (
@@ -279,12 +310,6 @@ const FootballStatsAI = () => {
                   Football-Data.org Connesso
                 </span>
               </div>
-            )}
-            {api.lastUpdate && (
-              <span className="text-xs text-gray-500">
-                Ultimo aggiornamento:{" "}
-                {api.lastUpdate.toLocaleTimeString("it-IT")}
-              </span>
             )}
           </div>
 
@@ -307,7 +332,6 @@ const FootballStatsAI = () => {
           </button>
         </div>
 
-        {/* Selettore Data e Lega */}
         <div className="flex flex-col md:flex-row gap-4 mb-6 justify-between items-center">
           <LeagueSelector
             selectedLeague={selectedLeague}
@@ -345,16 +369,25 @@ const FootballStatsAI = () => {
           <div className="lg:col-span-2 space-y-4">
             {activeTab === "matches" && (
               <>
-                <div className="relative mb-4">
-                  <Search className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
-                  <input
-                    type="text"
-                    placeholder="Cerca partita..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="w-full pl-10 pr-4 py-3 bg-slate-800/50 border border-blue-700/30 rounded-lg focus:outline-none focus:border-blue-500"
+                <div className="flex gap-2 mb-4">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder="Cerca partita..."
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      className="w-full pl-10 pr-4 py-3 bg-slate-800/50 border border-blue-700/30 rounded-lg focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <AdvancedFilters
+                    onApplyFilters={setActiveFilters}
+                    onSavePreset={(preset) =>
+                      console.log("Salva preset", preset)
+                    }
                   />
                 </div>
+
                 {filteredMatches.length === 0 ? (
                   <div className="bg-slate-800/50 border border-blue-800/30 rounded-xl p-12 text-center">
                     <p className="text-gray-400 mb-2">
@@ -373,11 +406,14 @@ const FootballStatsAI = () => {
                       match={match}
                       onAnalyze={handleAnalyze}
                       analyzing={aiAnalyzing && selectedMatch?.id === match.id}
+                      isFavorite={isFavorite(match.id)}
+                      onToggleFavorite={() => toggleFavorite(match)}
                     />
                   ))
                 )}
               </>
             )}
+
             {activeTab === "live" && <LiveMatches matches={liveMatches} />}
             {activeTab === "standings" && (
               <StandingsTable standings={standings} />
@@ -405,6 +441,16 @@ const FootballStatsAI = () => {
               </div>
             )}
             {activeTab === "predictions" && <PredictionsPanel />}
+            {activeTab === "history" && (
+              <AnalysisHistory userId={auth.user?.id || "guest"} />
+            )}
+            {activeTab === "betting" && (
+              <BettingTracker userId={auth.user?.id || "guest"} />
+            )}
+            {activeTab === "calculator" && <KellyValueCalculator />}
+            {activeTab === "favorites" && (
+              <FavoritesWatchlist userId={auth.user?.id || "guest"} />
+            )}
           </div>
 
           <div className="space-y-6">

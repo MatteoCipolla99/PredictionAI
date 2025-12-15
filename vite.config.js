@@ -7,11 +7,17 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     proxy: {
-      // Questo è il trucco per aggirare il blocco CORS
-      "/api": {
+      // Proxy per il backend locale (Gemini AI)
+      "/api/gemini": {
+        target: "http://localhost:5000",
+        changeOrigin: true,
+        secure: false,
+      },
+      // Proxy per API Football-Data.org
+      "/api/football": {
         target: "https://api.football-data.org/v4",
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ""),
+        rewrite: (path) => path.replace(/^\/api\/football/, ""),
         secure: false,
       },
     },

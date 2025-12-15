@@ -1,8 +1,14 @@
-import { Brain, TrendingUp } from "lucide-react";
+import { Brain, TrendingUp, Heart } from "lucide-react";
 import SocialShare from "./SocialShare";
 import CommentsSystem from "./CommentsSystem";
 
-const MatchCard = ({ match, onAnalyze, analyzing }) => {
+const MatchCard = ({
+  match,
+  onAnalyze,
+  analyzing,
+  isFavorite,
+  onToggleFavorite,
+}) => {
   return (
     <div className="bg-slate-800/50 border border-blue-800/30 rounded-xl p-6 hover:border-blue-600/50 transition-all">
       <div className="flex items-center justify-between mb-4">
@@ -12,13 +18,25 @@ const MatchCard = ({ match, onAnalyze, analyzing }) => {
             {match.statusLong || match.status}
           </span>
         </div>
-        <SocialShare
-          match={match}
-          analysis={{
-            prediction: match.aiPrediction,
-            confidence: match.confidence,
-          }}
-        />
+        <div className="flex items-center gap-2">
+          <SocialShare
+            match={match}
+            analysis={{
+              prediction: match.aiPrediction,
+              confidence: match.confidence,
+            }}
+          />
+          <button
+            onClick={onToggleFavorite}
+            className={`p-2 rounded-lg transition-all ${
+              isFavorite
+                ? "text-red-500 bg-red-500/10"
+                : "text-gray-400 hover:text-red-400"
+            }`}
+          >
+            <Heart className={`w-5 h-5 ${isFavorite ? "fill-current" : ""}`} />
+          </button>
+        </div>
       </div>
 
       <div className="flex items-center justify-between mb-6">

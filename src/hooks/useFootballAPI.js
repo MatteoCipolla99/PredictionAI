@@ -2,7 +2,7 @@ import { useState, useCallback } from "react";
 
 // CONFIGURAZIONE PROXY
 const API_CONFIG = {
-  baseUrl: "/api",
+  baseUrl: "/api/football", // Updated to match vite.config.js proxy
   headers: {
     "X-Auth-Token": "85f4e8009ca44155a30d5ec5944ae943",
   },
@@ -92,14 +92,12 @@ export const useFootballAPI = () => {
         { headers: API_CONFIG.headers }
       );
 
-      if (!response.ok) {
+      if (!response.ok)
         throw new Error(`HTTP error! status: ${response.status}`);
-      }
 
       const data = await response.json();
 
       if (data.errorCode) {
-        console.error("API Error:", data.message);
         setError(data.message);
         return { success: false, error: data.message };
       }
@@ -148,8 +146,6 @@ export const useFootballAPI = () => {
 
       try {
         const url = `${API_CONFIG.baseUrl}/competitions/${code}/matches?dateFrom=${targetDate}&dateTo=${targetDate}`;
-        console.log(`🔄 Chiamata API (via Proxy): ${url}`);
-
         const response = await fetch(url, { headers: API_CONFIG.headers });
 
         if (!response.ok) {
@@ -232,28 +228,19 @@ export const useFootballAPI = () => {
   );
 
   const fetchLiveMatches = useCallback(async () => {
-    // Football-Data.org free tier non supporta live matches
-    // Restituiamo array vuoto
     return { success: true, data: [] };
   }, []);
 
   const fetchH2H = useCallback(async (team1Id, team2Id) => {
-    // Football-Data.org free tier ha limitazioni sugli H2H
-    // Generiamo dati sintetici per demo
     setLoading(true);
-
     try {
-      // Simula un piccolo delay
       await new Promise((resolve) => setTimeout(resolve, 500));
-
-      // Dati H2H simulati ma realistici
       const mockH2H = {
         totalMatches: 10,
         team1Wins: Math.floor(Math.random() * 5) + 2,
         team2Wins: Math.floor(Math.random() * 4) + 1,
         draws: 0,
       };
-
       mockH2H.draws =
         mockH2H.totalMatches - mockH2H.team1Wins - mockH2H.team2Wins;
 
@@ -278,10 +265,8 @@ export const useFootballAPI = () => {
         bttsPercentage: (Math.random() * 30 + 50).toFixed(1),
         lastMatches: [],
       };
-
       return { success: true, data };
     } catch (err) {
-      console.error("H2H Error:", err);
       return { success: false, error: err.message };
     } finally {
       setLoading(false);

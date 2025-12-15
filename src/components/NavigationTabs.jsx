@@ -5,6 +5,10 @@ import {
   BarChart3,
   LineChart,
   Activity,
+  History,
+  DollarSign,
+  Calculator,
+  Heart,
 } from "lucide-react";
 
 const NavigationTabs = ({ activeTab, setActiveTab, liveCount = 0 }) => {
@@ -12,13 +16,17 @@ const NavigationTabs = ({ activeTab, setActiveTab, liveCount = 0 }) => {
     { id: "matches", label: "Partite", icon: Trophy },
     { id: "predictions", label: "Predizioni AI", icon: Brain },
     { id: "standings", label: "Classifica", icon: Users },
-    { id: "stats", label: "Statistiche Avanzate", icon: BarChart3 },
-    { id: "performance", label: "Performance", icon: LineChart },
     { id: "live", label: `Live (${liveCount})`, icon: Activity },
+    { id: "stats", label: "Statistiche", icon: BarChart3 },
+    { id: "performance", label: "Performance", icon: LineChart },
+    { id: "history", label: "Storico", icon: History },
+    { id: "betting", label: "Tracker", icon: DollarSign },
+    { id: "calculator", label: "Kelly Calc", icon: Calculator },
+    { id: "favorites", label: "Preferiti", icon: Heart },
   ];
 
   return (
-    <div className="flex gap-2 mb-6 overflow-x-auto pb-2">
+    <div className="flex gap-2 mb-6 overflow-x-auto pb-2 scrollbar-thin scrollbar-thumb-blue-600 scrollbar-track-slate-800">
       {tabs.map((tab) => (
         <button
           key={tab.id}

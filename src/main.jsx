@@ -4,7 +4,6 @@ import "./index.css";
 import { AuthProvider } from "./context/AuthContext";
 import { ThemeProvider } from "./context/ThemeContext";
 
-// Ho rimosso <StrictMode> per evitare doppie chiamate API che consumano la quota
 createRoot(document.getElementById("root")).render(
   <ThemeProvider>
     <AuthProvider>
