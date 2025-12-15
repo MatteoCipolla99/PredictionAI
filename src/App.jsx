@@ -11,8 +11,8 @@ import {
 import { useAuth } from "./context/AuthContext";
 import { useFootballAPI } from "./hooks/useFootballAPI";
 import { useDemoData } from "./hooks/useDemoData";
+import { useGenerativeAI } from "./hooks/useGenerativeAI"; // <--- Importiamo l'AI
 
-// Components
 import Header from "./components/Header";
 import NavigationTabs from "./components/NavigationTabs";
 import { LeagueSelector } from "./components/LeagueSelector";
@@ -38,16 +38,20 @@ const FootballStatsAI = () => {
   const [notifications, setNotifications] = useState([]);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showPremiumModal, setShowPremiumModal] = useState(false);
+
+  // Stati per l'Analisi AI
   const [aiAnalyzing, setAiAnalyzing] = useState(false);
   const [aiAnalysis, setAiAnalysis] = useState(null);
   const [selectedMatch, setSelectedMatch] = useState(null);
   const [h2hData, setH2hData] = useState(null);
   const [loadingH2h, setLoadingH2h] = useState(false);
+
   const [searchTerm, setSearchTerm] = useState("");
   const [dataLoaded, setDataLoaded] = useState(false);
 
   const auth = useAuth();
   const api = useFootballAPI();
+  const genAI = useGenerativeAI(); // <--- Inizializziamo l'hook AI
   const {
     getDemoMatches,
     getDemoLiveMatches,
@@ -75,15 +79,7 @@ const FootballStatsAI = () => {
       setMatches(result.data);
     } else {
       console.log("Nessuna partita o errore API.");
-      if (api.apiConnected) {
-        setMatches([]);
-      } else {
-        const demoMatches = getDemoMatches().map((m) => ({
-          ...m,
-          date: currentDate.toISOString(),
-        }));
-        setMatches(demoMatches);
-      }
+      setMatches([]);
     }
   };
 
@@ -93,16 +89,15 @@ const FootballStatsAI = () => {
       setStandings(result.data);
       return result.data;
     } else {
-      const demo = getDemoStandings();
-      setStandings(demo);
-      return demo;
+      setStandings([]);
+      return [];
     }
   };
 
   const fetchLiveMatches = async () => {
     const result = await api.fetchLiveMatches();
     if (result.success) setLiveMatches(result.data);
-    else setLiveMatches(getDemoLiveMatches());
+    else setLiveMatches([]);
   };
 
   const changeDate = (days) => {
@@ -111,101 +106,59 @@ const FootballStatsAI = () => {
     setCurrentDate(newDate);
   };
 
-  // --- LOGICA AI ---
-  const generateSmartAnalysis = (match, h2hData) => {
-    const hasH2H = h2hData && h2hData.totalMatches > 0;
-    const stats = match.stats || {};
-
-    let homeScore = 50,
-      awayScore = 50;
-    if (stats.homePoints && stats.awayPoints) {
-      const pointDiff = stats.homePoints - stats.awayPoints;
-      homeScore += pointDiff * 1.5;
-      awayScore -= pointDiff * 1.5;
-    }
-    if (stats.homeForm) homeScore += (stats.homeForm - 50) * 0.4;
-    if (stats.awayForm) awayScore += (stats.awayForm - 50) * 0.4;
-    homeScore += 5;
-
-    const total = homeScore + awayScore;
-    const probHome = ((homeScore / total) * 100).toFixed(1);
-    const probAway = ((awayScore / total) * 100).toFixed(1);
-
-    let prediction = "X",
-      confidence = 60;
-    if (parseFloat(probHome) > 55) {
-      prediction = "1 (Casa)";
-      confidence = Math.min(90, parseFloat(probHome));
-    } else if (parseFloat(probAway) > 55) {
-      prediction = "2 (Trasferta)";
-      confidence = Math.min(90, parseFloat(probAway));
-    } else {
-      prediction = "X o Goal";
-      confidence = 55;
+  // --- CUORE DELL'INTEGRAZIONE AI ---
+  const handleAnalyze = async (match) => {
+    // 1. Controllo permessi (opzionale: richiede login per usare AI)
+    if (!auth.canUseAnalysis()) {
+      addNotification("warning", "Limite Raggiunto", "Passa a Premium!");
+      setShowPremiumModal(true);
+      return;
     }
 
-    const keyPoints = [];
-    if (stats.homeForm > 80) keyPoints.push(`${match.home} in ottima forma`);
-    if (hasH2H && h2hData.team1WinPercentage > 50)
-      keyPoints.push(`Storico a favore di ${match.home}`);
-    if (keyPoints.length === 0) keyPoints.push("Partita molto equilibrata");
+    auth.incrementAnalysisCount();
+    setSelectedMatch(match);
 
-    return {
-      summary: `Analisi ${match.home} vs ${match.away}`,
+    // Mostriamo lo stato di caricamento
+    setAiAnalyzing(true);
+    setLoadingH2h(true);
+
+    // 2. Recuperiamo i dati H2H (storico scontri)
+    let h2hResult = null;
+    const h2hResponse = await api.fetchH2H(match.homeId, match.awayId);
+    if (h2hResponse.success) h2hResult = h2hResponse.data;
+    setH2hData(h2hResult);
+    setLoadingH2h(false);
+
+    // 3. CHIAMATA A GEMINI AI
+    // Passiamo tutti i dati numerici e riceviamo indietro il testo generato
+    const aiResult = await genAI.generatePrediction(match, h2hResult);
+
+    // 4. Combiniamo tutto per mostrarlo a schermo
+    const finalAnalysis = {
+      ...aiResult, // Qui ci sono summary, tacticalAnalysis, reasoning di Gemini
       venue: match.venue || "Stadio non disponibile",
-      realData: api.apiConnected,
-      hasH2H,
-      keyPoints,
-      tacticalAnalysis: {
-        home: "Analisi tattica casa",
-        away: "Analisi tattica trasferta",
-      },
+      realData: true,
+      // Questi campi per ora li lasciamo statici o calcolati semplici, l'AI fa il testo
       predictions: {
-        risultatoEsatto: "Premium",
+        risultatoEsatto: "Vedi analisi",
         golTotali: "Over 1.5",
-        btts: "Sì",
-        corner: "Over 8.5",
+        btts: "Probabile",
+        corner: "N/D",
       },
       valueRatings: {
         casa: { rating: 7, value: "Media" },
         pareggio: { rating: 6, value: "Media" },
         trasferta: { rating: 7, value: "Media" },
       },
-      aiPrediction: prediction,
-      confidence: Math.round(confidence),
     };
-  };
 
-  const handleAnalyze = async (match) => {
-    if (!auth.canUseAnalysis()) {
-      addNotification("warning", "Limite Raggiunto", "Passa a Premium!");
-      setShowPremiumModal(true);
-      return;
-    }
-    auth.incrementAnalysisCount();
-    setSelectedMatch(match);
-    setAiAnalyzing(true);
-    setLoadingH2h(true);
-
-    let h2hResult = null;
-    if (api.apiConnected && match.homeId && match.awayId) {
-      const result = await api.fetchH2H(match.homeId, match.awayId);
-      if (result.success) h2hResult = result.data;
-    }
-    if (!h2hResult) h2hResult = getDemoH2hData();
-    setH2hData(h2hResult);
-    setLoadingH2h(false);
-
-    setTimeout(() => {
-      const analysis = generateSmartAnalysis(match, h2hResult);
-      setAiAnalysis(analysis);
-      setAiAnalyzing(false);
-      addNotification(
-        "success",
-        "Analisi Pronta",
-        `Match: ${match.home} vs ${match.away}`
-      );
-    }, 1000);
+    setAiAnalysis(finalAnalysis);
+    setAiAnalyzing(false); // Stop caricamento
+    addNotification(
+      "success",
+      "Analisi AI Completata",
+      `Pronostico generato per ${match.home}`
+    );
   };
 
   const addNotification = (type, title, message) => {
@@ -251,14 +204,12 @@ const FootballStatsAI = () => {
       />
 
       <div className="max-w-7xl mx-auto px-4 py-6">
-        {/* API STATUS & CONTROL */}
+        {/* Barra di Controllo API */}
         <div className="mb-6 flex flex-col md:flex-row gap-4 justify-between items-center bg-slate-900/50 p-4 rounded-xl border border-blue-800/30">
           {!api.apiConnected ? (
             <div className="flex items-center gap-3 text-gray-400">
               <WifiOff className="w-5 h-5" />
-              <span className="text-sm">
-                Clicca "Scarica Dati" per connetterti
-              </span>
+              <span className="text-sm">In attesa dei dati...</span>
             </div>
           ) : (
             <div className="flex items-center gap-3 text-green-400">
@@ -277,6 +228,7 @@ const FootballStatsAI = () => {
           </button>
         </div>
 
+        {/* Selettore Data e Lega */}
         <div className="flex flex-col md:flex-row gap-4 mb-6 justify-between items-center">
           <LeagueSelector
             selectedLeague={selectedLeague}
@@ -326,11 +278,13 @@ const FootballStatsAI = () => {
                 </div>
                 {filteredMatches.length === 0 ? (
                   <div className="bg-slate-800/50 border border-blue-800/30 rounded-xl p-12 text-center">
-                    <p className="text-gray-400 mb-2">Nessun dato.</p>
+                    <p className="text-gray-400 mb-2">
+                      Nessun dato visualizzato.
+                    </p>
                     <p className="text-xs text-gray-500">
-                      1. Scegli una data con partite.
+                      1. Vai a una data futura (es. Domenica).
                       <br />
-                      2. Premi "SCARICA DATI".
+                      2. Clicca "SCARICA DATI".
                     </p>
                   </div>
                 ) : (
@@ -375,12 +329,14 @@ const FootballStatsAI = () => {
           </div>
 
           <div className="space-y-6">
+            {/* Pannello laterale che mostrerà l'analisi di Gemini */}
             <AIAnalysisPanel
               analyzing={aiAnalyzing}
               analysis={aiAnalysis}
               h2hData={h2hData}
               loadingH2h={loadingH2h}
             />
+
             {selectedMatch && aiAnalysis && h2hData && (
               <AdvancedH2H
                 team1={selectedMatch.home}
