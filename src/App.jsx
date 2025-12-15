@@ -1,17 +1,16 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Search,
   Calendar as CalendarIcon,
   ChevronLeft,
   ChevronRight,
-  WifiOff,
   DownloadCloud,
-  CheckCircle2,
+  CheckCircle,
+  AlertCircle,
 } from "lucide-react";
 import { useAuth } from "./context/AuthContext";
 import { useFootballAPI } from "./hooks/useFootballAPI";
-import { useDemoData } from "./hooks/useDemoData";
-import { useGenerativeAI } from "./hooks/useGenerativeAI"; // <--- Importiamo l'AI
+import { useGenerativeAI } from "./hooks/useGenerativeAI";
 
 import Header from "./components/Header";
 import NavigationTabs from "./components/NavigationTabs";
@@ -48,23 +47,76 @@ const FootballStatsAI = () => {
 
   const [searchTerm, setSearchTerm] = useState("");
   const [dataLoaded, setDataLoaded] = useState(false);
+  const [isLoadingData, setIsLoadingData] = useState(false);
+
+  // Ref per prevenire chiamate duplicate
+  const loadingRef = useRef(false);
+  const lastLoadedDateRef = useRef(null);
+  const lastLoadedLeagueRef = useRef(null);
 
   const auth = useAuth();
   const api = useFootballAPI();
-  const genAI = useGenerativeAI(); // <--- Inizializziamo l'hook AI
-  const {
-    getDemoMatches,
-    getDemoLiveMatches,
-    getDemoH2hData,
-    getDemoStandings,
-  } = useDemoData();
+  const genAI = useGenerativeAI();
+
+  // Test connessione API all'avvio
+  useEffect(() => {
+    api.testConnection();
+  }, []);
 
   const loadData = async () => {
+    // Previeni chiamate duplicate
+    if (loadingRef.current) {
+      console.log("⏸️ Caricamento già in corso, salto...");
+      return;
+    }
+
+    const dateStr = currentDate.toISOString().split("T")[0];
+    const leagueKey = `${selectedLeague}-${dateStr}`;
+
+    // Se abbiamo già caricato questi dati, saltiamo
+    if (
+      lastLoadedDateRef.current === dateStr &&
+      lastLoadedLeagueRef.current === selectedLeague
+    ) {
+      console.log("✅ Dati già caricati per questa data/lega");
+      return;
+    }
+
+    loadingRef.current = true;
+    setIsLoadingData(true);
     setDataLoaded(false);
-    const standingsResult = await fetchStandings();
-    await fetchMatches(standingsResult);
-    await fetchLiveMatches();
-    setDataLoaded(true);
+
+    try {
+      console.log(
+        `📡 Caricamento dati per ${selectedLeague} del ${dateStr}...`
+      );
+
+      // 1. Carica classifica
+      const standingsResult = await fetchStandings();
+
+      // 2. Carica partite con classifica
+      await fetchMatches(standingsResult);
+
+      // 3. Carica live (sempre vuoto per free tier)
+      await fetchLiveMatches();
+
+      // Segna come caricato
+      lastLoadedDateRef.current = dateStr;
+      lastLoadedLeagueRef.current = selectedLeague;
+      setDataLoaded(true);
+
+      addNotification(
+        "success",
+        "Dati Caricati",
+        `${matches.length} partite trovate per ${dateStr}`
+      );
+    } catch (error) {
+      console.error("Errore caricamento dati:", error);
+      addNotification("error", "Errore", "Impossibile caricare i dati");
+    } finally {
+      loadingRef.current = false;
+      setIsLoadingData(false);
+    }
   };
 
   const fetchMatches = async (currentStandings = []) => {
@@ -77,8 +129,9 @@ const FootballStatsAI = () => {
 
     if (result.success) {
       setMatches(result.data);
+      console.log(`✅ ${result.data.length} partite caricate`);
     } else {
-      console.log("Nessuna partita o errore API.");
+      console.log("⚠️ Nessuna partita o errore API:", result.error);
       setMatches([]);
     }
   };
@@ -87,8 +140,10 @@ const FootballStatsAI = () => {
     const result = await api.fetchStandings(selectedLeague);
     if (result.success && result.data.length > 0) {
       setStandings(result.data);
+      console.log(`✅ Classifica caricata: ${result.data.length} squadre`);
       return result.data;
     } else {
+      console.log("⚠️ Classifica non disponibile");
       setStandings([]);
       return [];
     }
@@ -104,11 +159,20 @@ const FootballStatsAI = () => {
     const newDate = new Date(currentDate);
     newDate.setDate(newDate.getDate() + days);
     setCurrentDate(newDate);
+    // Reset dati quando cambia data
+    setDataLoaded(false);
   };
+
+  // Reset quando cambia lega
+  useEffect(() => {
+    setDataLoaded(false);
+    setMatches([]);
+    setStandings([]);
+  }, [selectedLeague]);
 
   // --- CUORE DELL'INTEGRAZIONE AI ---
   const handleAnalyze = async (match) => {
-    // 1. Controllo permessi (opzionale: richiede login per usare AI)
+    // 1. Controllo permessi
     if (!auth.canUseAnalysis()) {
       addNotification("warning", "Limite Raggiunto", "Passa a Premium!");
       setShowPremiumModal(true);
@@ -122,43 +186,39 @@ const FootballStatsAI = () => {
     setAiAnalyzing(true);
     setLoadingH2h(true);
 
-    // 2. Recuperiamo i dati H2H (storico scontri)
-    let h2hResult = null;
-    const h2hResponse = await api.fetchH2H(match.homeId, match.awayId);
-    if (h2hResponse.success) h2hResult = h2hResponse.data;
-    setH2hData(h2hResult);
-    setLoadingH2h(false);
+    try {
+      // 2. Recuperiamo i dati H2H
+      let h2hResult = null;
+      const h2hResponse = await api.fetchH2H(match.homeId, match.awayId);
+      if (h2hResponse.success) {
+        h2hResult = h2hResponse.data;
+      }
+      setH2hData(h2hResult);
+      setLoadingH2h(false);
 
-    // 3. CHIAMATA A GEMINI AI
-    // Passiamo tutti i dati numerici e riceviamo indietro il testo generato
-    const aiResult = await genAI.generatePrediction(match, h2hResult);
+      // 3. CHIAMATA A GEMINI AI
+      const aiResult = await genAI.generatePrediction(match, h2hResult);
 
-    // 4. Combiniamo tutto per mostrarlo a schermo
-    const finalAnalysis = {
-      ...aiResult, // Qui ci sono summary, tacticalAnalysis, reasoning di Gemini
-      venue: match.venue || "Stadio non disponibile",
-      realData: true,
-      // Questi campi per ora li lasciamo statici o calcolati semplici, l'AI fa il testo
-      predictions: {
-        risultatoEsatto: "Vedi analisi",
-        golTotali: "Over 1.5",
-        btts: "Probabile",
-        corner: "N/D",
-      },
-      valueRatings: {
-        casa: { rating: 7, value: "Media" },
-        pareggio: { rating: 6, value: "Media" },
-        trasferta: { rating: 7, value: "Media" },
-      },
-    };
+      // 4. Combiniamo tutto per mostrarlo a schermo
+      setAiAnalysis(aiResult);
 
-    setAiAnalysis(finalAnalysis);
-    setAiAnalyzing(false); // Stop caricamento
-    addNotification(
-      "success",
-      "Analisi AI Completata",
-      `Pronostico generato per ${match.home}`
-    );
+      addNotification(
+        "success",
+        "Analisi AI Completata",
+        `Pronostico generato per ${match.home} vs ${match.away}`
+      );
+    } catch (error) {
+      console.error("Errore durante l'analisi:", error);
+      addNotification(
+        "error",
+        "Errore Analisi",
+        "Si è verificato un errore. Riprova."
+      );
+      setAiAnalyzing(false);
+      setLoadingH2h(false);
+    } finally {
+      setAiAnalyzing(false);
+    }
   };
 
   const addNotification = (type, title, message) => {
@@ -206,25 +266,44 @@ const FootballStatsAI = () => {
       <div className="max-w-7xl mx-auto px-4 py-6">
         {/* Barra di Controllo API */}
         <div className="mb-6 flex flex-col md:flex-row gap-4 justify-between items-center bg-slate-900/50 p-4 rounded-xl border border-blue-800/30">
-          {!api.apiConnected ? (
-            <div className="flex items-center gap-3 text-gray-400">
-              <WifiOff className="w-5 h-5" />
-              <span className="text-sm">In attesa dei dati...</span>
-            </div>
-          ) : (
-            <div className="flex items-center gap-3 text-green-400">
-              <CheckCircle2 className="w-5 h-5" />
-              <span className="text-sm font-bold">
-                Football-Data.org Connesso
+          <div className="flex items-center gap-4">
+            {!api.apiConnected ? (
+              <div className="flex items-center gap-3 text-gray-400">
+                <AlertCircle className="w-5 h-5" />
+                <span className="text-sm">In attesa dei dati...</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-3 text-green-400">
+                <CheckCircle className="w-5 h-5" />
+                <span className="text-sm font-bold">
+                  Football-Data.org Connesso
+                </span>
+              </div>
+            )}
+            {api.lastUpdate && (
+              <span className="text-xs text-gray-500">
+                Ultimo aggiornamento:{" "}
+                {api.lastUpdate.toLocaleTimeString("it-IT")}
               </span>
-            </div>
-          )}
+            )}
+          </div>
 
           <button
             onClick={loadData}
-            className="flex items-center gap-2 px-6 py-2 bg-green-600 hover:bg-green-700 rounded-lg font-bold transition-all shadow-lg shadow-green-900/20"
+            disabled={isLoadingData}
+            className="flex items-center gap-2 px-6 py-2 bg-green-600 hover:bg-green-700 rounded-lg font-bold transition-all shadow-lg shadow-green-900/20 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <DownloadCloud className="w-5 h-5" /> SCARICA DATI
+            {isLoadingData ? (
+              <>
+                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                CARICAMENTO...
+              </>
+            ) : (
+              <>
+                <DownloadCloud className="w-5 h-5" />
+                SCARICA DATI
+              </>
+            )}
           </button>
         </div>
 
@@ -237,7 +316,7 @@ const FootballStatsAI = () => {
           <div className="flex items-center gap-4 bg-slate-800/50 p-2 rounded-xl border border-blue-800/30">
             <button
               onClick={() => changeDate(-1)}
-              className="p-2 hover:bg-slate-700 rounded-lg"
+              className="p-2 hover:bg-slate-700 rounded-lg transition-all"
             >
               <ChevronLeft className="w-5 h-5" />
             </button>
@@ -249,7 +328,7 @@ const FootballStatsAI = () => {
             </div>
             <button
               onClick={() => changeDate(1)}
-              className="p-2 hover:bg-slate-700 rounded-lg"
+              className="p-2 hover:bg-slate-700 rounded-lg transition-all"
             >
               <ChevronRight className="w-5 h-5" />
             </button>
@@ -282,9 +361,9 @@ const FootballStatsAI = () => {
                       Nessun dato visualizzato.
                     </p>
                     <p className="text-xs text-gray-500">
-                      1. Vai a una data futura (es. Domenica).
+                      1. Seleziona una data (es. Domenica prossima)
                       <br />
-                      2. Clicca "SCARICA DATI".
+                      2. Clicca "SCARICA DATI"
                     </p>
                   </div>
                 ) : (
@@ -329,7 +408,6 @@ const FootballStatsAI = () => {
           </div>
 
           <div className="space-y-6">
-            {/* Pannello laterale che mostrerà l'analisi di Gemini */}
             <AIAnalysisPanel
               analyzing={aiAnalyzing}
               analysis={aiAnalysis}
@@ -360,4 +438,5 @@ const FootballStatsAI = () => {
     </div>
   );
 };
+
 export default FootballStatsAI;

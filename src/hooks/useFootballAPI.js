@@ -1,10 +1,9 @@
 import { useState, useCallback } from "react";
 
-// CONFIGURAZIONE PROXY (Il browser chiama /api, Vite chiama il server vero)
+// CONFIGURAZIONE PROXY
 const API_CONFIG = {
-  baseUrl: "/api", // <--- ORA PUNTA AL NOSTRO PROXY LOCALE
+  baseUrl: "/api",
   headers: {
-    // LA TUA CHIAVE:
     "X-Auth-Token": "85f4e8009ca44155a30d5ec5944ae943",
   },
 };
@@ -24,13 +23,14 @@ const calculateSyntheticOdds = (homeRank, awayRank) => {
     away = 2.5;
   if (!homeRank || !awayRank)
     return { home: "2.50", draw: "3.20", away: "2.50" };
+
   const rankDiff = awayRank - homeRank;
   if (rankDiff > 0) {
-    home = Math.max(1.1, 2.5 - rankDiff * 0.1);
-    away = Math.min(15.0, 2.5 + rankDiff * 0.15);
+    home = Math.max(1.1, 2.5 - rankDiff * 0.08);
+    away = Math.min(15.0, 2.5 + rankDiff * 0.12);
   } else {
-    away = Math.max(1.1, 2.5 - Math.abs(rankDiff) * 0.1);
-    home = Math.min(15.0, 2.5 + Math.abs(rankDiff) * 0.15);
+    away = Math.max(1.1, 2.5 - Math.abs(rankDiff) * 0.08);
+    home = Math.min(15.0, 2.5 + Math.abs(rankDiff) * 0.12);
   }
   draw = Math.max(2.8, (home + away) / 2 + 0.5);
   return {
@@ -38,6 +38,23 @@ const calculateSyntheticOdds = (homeRank, awayRank) => {
     draw: draw.toFixed(2),
     away: away.toFixed(2),
   };
+};
+
+const calculateFormScore = (formString) => {
+  if (!formString) return 50;
+  const scores = { W: 20, D: 10, L: 0 };
+  let total = 0;
+  const matches = formString.replace(/,/g, "").split("").slice(-5);
+  matches.forEach((char) => (total += scores[char] || 10));
+  return total;
+};
+
+const mapStatus = (status) => {
+  if (status === "TIMED" || status === "SCHEDULED") return "NS";
+  if (status === "IN_PLAY") return "LIVE";
+  if (status === "PAUSED") return "HT";
+  if (status === "FINISHED") return "FT";
+  return status;
 };
 
 export const useFootballAPI = () => {
@@ -53,16 +70,20 @@ export const useFootballAPI = () => {
       });
       if (response.ok) {
         setApiConnected(true);
+        setLastUpdate(new Date());
         return { success: true };
       }
+      setApiConnected(false);
       return { success: false };
     } catch (err) {
+      setApiConnected(false);
       return { success: false, error: err.message };
     }
   }, []);
 
   const fetchStandings = useCallback(async (leagueId) => {
     setLoading(true);
+    setError(null);
     const code = LEAGUE_MAP[leagueId] || "SA";
 
     try {
@@ -71,10 +92,15 @@ export const useFootballAPI = () => {
         { headers: API_CONFIG.headers }
       );
 
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
       const data = await response.json();
 
       if (data.errorCode) {
         console.error("API Error:", data.message);
+        setError(data.message);
         return { success: false, error: data.message };
       }
 
@@ -97,11 +123,16 @@ export const useFootballAPI = () => {
             goals: { for: item.goalsFor, against: item.goalsAgainst },
           },
         }));
+
+        setApiConnected(true);
+        setLastUpdate(new Date());
         return { success: true, data: table };
       }
       return { success: false, data: [] };
     } catch (err) {
       console.error("Fetch Standings Error:", err);
+      setError(err.message);
+      setApiConnected(false);
       return { success: false, error: err.message };
     } finally {
       setLoading(false);
@@ -111,28 +142,38 @@ export const useFootballAPI = () => {
   const fetchMatches = useCallback(
     async (leagueId, date = null, standings = []) => {
       setLoading(true);
+      setError(null);
       const code = LEAGUE_MAP[leagueId] || "SA";
       const targetDate = date || new Date().toISOString().split("T")[0];
 
       try {
-        // Usiamo il proxy /api invece dell'URL completo
         const url = `${API_CONFIG.baseUrl}/competitions/${code}/matches?dateFrom=${targetDate}&dateTo=${targetDate}`;
-        console.log(`Chiamata API (via Proxy): ${url}`);
+        console.log(`🔄 Chiamata API (via Proxy): ${url}`);
 
         const response = await fetch(url, { headers: API_CONFIG.headers });
-        const data = await response.json();
 
-        if (data.errorCode) {
-          if (data.errorCode === 429)
+        if (!response.ok) {
+          if (response.status === 429) {
+            setError("Limite API raggiunto. Attendi 1 minuto.");
             return {
               success: false,
               error: "Troppe richieste (attendi 1 min)",
             };
+          }
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        if (data.errorCode) {
+          setError(data.message);
           return { success: false, error: data.message };
         }
 
         if (data.matches) {
           setApiConnected(true);
+          setLastUpdate(new Date());
+
           const formattedMatches = data.matches.map((match) => {
             const homeRank = standings.find(
               (s) => s.team.id === match.homeTeam.id
@@ -158,7 +199,7 @@ export const useFootballAPI = () => {
               }),
               status: mapStatus(match.status),
               statusLong: match.status,
-              venue: "Stadio Standard",
+              venue: match.venue || "Stadio Standard",
               homeScore: match.score.fullTime.home,
               awayScore: match.score.fullTime.away,
               homeOdds: odds.home,
@@ -170,13 +211,18 @@ export const useFootballAPI = () => {
                 homePoints: homeRank?.points || 0,
                 awayPoints: awayRank?.points || 0,
               },
+              aiPrediction: null,
+              confidence: null,
             };
           });
+
           return { success: true, data: formattedMatches };
         }
         return { success: true, data: [] };
       } catch (err) {
-        console.error("API Fetch Error:", err);
+        console.error("❌ API Fetch Error:", err);
+        setError(err.message);
+        setApiConnected(false);
         return { success: false, error: err.message };
       } finally {
         setLoading(false);
@@ -185,29 +231,61 @@ export const useFootballAPI = () => {
     []
   );
 
-  const mapStatus = (status) => {
-    if (status === "TIMED" || status === "SCHEDULED") return "NS";
-    if (status === "IN_PLAY") return "LIVE";
-    if (status === "PAUSED") return "HT";
-    if (status === "FINISHED") return "FT";
-    return status;
-  };
-
-  const calculateFormScore = (formString) => {
-    if (!formString) return 50;
-    const scores = { W: 20, D: 10, L: 0 };
-    let total = 0;
-    const matches = formString.replace(/,/g, "").split("").slice(-5);
-    matches.forEach((char) => (total += scores[char] || 10));
-    return total;
-  };
-
   const fetchLiveMatches = useCallback(async () => {
+    // Football-Data.org free tier non supporta live matches
+    // Restituiamo array vuoto
     return { success: true, data: [] };
   }, []);
 
   const fetchH2H = useCallback(async (team1Id, team2Id) => {
-    return { success: false };
+    // Football-Data.org free tier ha limitazioni sugli H2H
+    // Generiamo dati sintetici per demo
+    setLoading(true);
+
+    try {
+      // Simula un piccolo delay
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      // Dati H2H simulati ma realistici
+      const mockH2H = {
+        totalMatches: 10,
+        team1Wins: Math.floor(Math.random() * 5) + 2,
+        team2Wins: Math.floor(Math.random() * 4) + 1,
+        draws: 0,
+      };
+
+      mockH2H.draws =
+        mockH2H.totalMatches - mockH2H.team1Wins - mockH2H.team2Wins;
+
+      const data = {
+        totalMatches: mockH2H.totalMatches,
+        team1Wins: mockH2H.team1Wins,
+        team2Wins: mockH2H.team2Wins,
+        draws: mockH2H.draws,
+        team1WinPercentage: (
+          (mockH2H.team1Wins / mockH2H.totalMatches) *
+          100
+        ).toFixed(1),
+        team2WinPercentage: (
+          (mockH2H.team2Wins / mockH2H.totalMatches) *
+          100
+        ).toFixed(1),
+        drawPercentage: ((mockH2H.draws / mockH2H.totalMatches) * 100).toFixed(
+          1
+        ),
+        avgGoals: (2.3 + Math.random() * 0.8).toFixed(1),
+        over25Percentage: (Math.random() * 30 + 50).toFixed(1),
+        bttsPercentage: (Math.random() * 30 + 50).toFixed(1),
+        lastMatches: [],
+      };
+
+      return { success: true, data };
+    } catch (err) {
+      console.error("H2H Error:", err);
+      return { success: false, error: err.message };
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   return {
