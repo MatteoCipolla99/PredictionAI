@@ -1,3 +1,6 @@
+import SocialShare from "./SocialShare";
+import CommentsSystem from "./CommentsSystem";
+
 const MatchCard = ({ match }) => {
   return (
     <div className="bg-surface border border-primary/30 rounded-xl p-6">

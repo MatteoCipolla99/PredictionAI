@@ -1,3 +1,6 @@
+import { useState } from "react";
+import { MessageSquare } from "lucide-react";
+
 const CommentsSystem = ({ matchId }) => {
   const [comments, setComments] = useState([]);
   const [newComment, setNewComment] = useState("");

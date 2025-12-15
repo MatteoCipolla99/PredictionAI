@@ -7,7 +7,7 @@ import {
   TrendingUp,
   BarChart3,
 } from "lucide-react";
-import { useAuth } from "../contexts/AuthContext";
+import { useAuth } from "../context/AuthContext";
 
 const PremiumModal = ({ isOpen, onClose }) => {
   const { upgradeToPremium } = useAuth();

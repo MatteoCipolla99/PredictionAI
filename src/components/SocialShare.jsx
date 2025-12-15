@@ -1,3 +1,6 @@
+import { useState } from "react";
+import { Share2 } from "lucide-react";
+
 const SocialShare = ({ match, analysis }) => {
   const [showShare, setShowShare] = useState(false);
 

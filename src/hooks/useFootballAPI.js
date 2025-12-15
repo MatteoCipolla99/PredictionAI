@@ -3,8 +3,8 @@ import { useState, useCallback } from "react";
 const API_CONFIG = {
   baseUrl: "https://api-football-v1.p.rapidapi.com/v3",
   headers: {
-    "X-RapidAPI-Key": "fa837b0f7a0652c77eeb60846dc8a144",
-    "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com",
+    "X-RapidAPI-Key": import.meta.env.VITE_RAPIDAPI_KEY,
+    "X-RapidAPI-Host": import.meta.env.VITE_RAPIDAPI_HOST,
   },
 };
 
