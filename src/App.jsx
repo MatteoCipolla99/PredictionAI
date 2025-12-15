@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { AlertCircle, Crown, Bell, Settings, Search } from "lucide-react";
+import { AlertCircle, Search } from "lucide-react";
 import { useAuth } from "./context/AuthContext";
 import { useFootballAPI } from "./hooks/useFootballAPI";
 import { useDemoData } from "./hooks/useDemoData";
@@ -57,14 +57,9 @@ const FootballStatsAI = () => {
   }, [selectedLeague]);
 
   const loadInitialData = async () => {
-    if (api.apiConnected) {
-      await Promise.all([fetchMatches(), fetchStandings(), fetchLiveMatches()]);
-    } else {
-      // Demo mode
-      setMatches(getDemoMatches());
-      setLiveMatches(getDemoLiveMatches());
-      setStandings(getDemoStandings());
-    }
+    // Proviamo sempre a scaricare i dati reali prima.
+    // Se l'API fallisce, le funzioni fetch... faranno fallback sui dati demo.
+    await Promise.all([fetchMatches(), fetchStandings(), fetchLiveMatches()]);
   };
 
   const fetchMatches = async () => {
@@ -72,6 +67,7 @@ const FootballStatsAI = () => {
     if (result.success && result.data.length > 0) {
       setMatches(result.data);
     } else {
+      console.log("API Fetch failed or empty, loading demo matches");
       setMatches(getDemoMatches());
     }
   };
@@ -94,6 +90,110 @@ const FootballStatsAI = () => {
     }
   };
 
+  // --- LOGICA INTELLIGENTE GRATUITA (NO OPENAI) ---
+  const generateSmartAnalysis = (match, h2hData) => {
+    // 1. Calcoli basati sui DATI REALI
+    const hasH2H = h2hData && h2hData.totalMatches > 0;
+
+    // Probabilità implicite dalle quote
+    const probHome = match.homeOdds ? (100 / match.homeOdds).toFixed(1) : 50;
+    const probAway = match.awayOdds ? (100 / match.awayOdds).toFixed(1) : 50;
+
+    // Determiniamo il favorito dai numeri
+    let prediction = "X";
+    let confidence = 0;
+
+    const homeOdds = parseFloat(match.homeOdds) || 2.5;
+    const awayOdds = parseFloat(match.awayOdds) || 2.5;
+
+    if (homeOdds < awayOdds && homeOdds < 2.0) {
+      prediction = "1 (Casa)";
+      confidence = Math.min(85, parseFloat(probHome));
+    } else if (awayOdds < homeOdds && awayOdds < 2.0) {
+      prediction = "2 (Trasferta)";
+      confidence = Math.min(85, parseFloat(probAway));
+    } else {
+      prediction = "X o Goal";
+      confidence = 60; // Partita equilibrata
+    }
+
+    // 2. Generazione Dinamica del Testo
+    const keyPoints = [];
+
+    // Analisi Forma
+    if (match.stats?.homeForm > 70)
+      keyPoints.push(
+        `Il ${match.home} è in ottima forma (${match.stats.homeForm}%)`
+      );
+    if (match.stats?.awayForm < 40)
+      keyPoints.push(`Il ${match.away} sta faticando in trasferta`);
+
+    // Analisi Quote
+    if (homeOdds < 1.5)
+      keyPoints.push(`Quote nettamente a favore del ${match.home}`);
+    if (Math.abs(homeOdds - awayOdds) < 0.5)
+      keyPoints.push("Quote molto equilibrate: partita incerta");
+
+    // Analisi H2H Reale
+    if (hasH2H) {
+      if (parseFloat(h2hData.team1WinPercentage) > 50) {
+        keyPoints.push(
+          `Storico favorevole al ${match.home} negli ultimi scontri`
+        );
+      } else if (parseFloat(h2hData.over25Percentage) > 60) {
+        keyPoints.push(
+          `Alta probabilità di molti gol (Over 2.5 al ${h2hData.over25Percentage}%)`
+        );
+      }
+    }
+
+    // Fallback punti chiave
+    if (keyPoints.length === 0)
+      keyPoints.push("Partita tattica da studiare live");
+
+    return {
+      summary: `Analisi statistica di ${match.home} vs ${match.away} basata su dati attuali.`,
+      venue: match.venue || "Stadio non disponibile",
+      realData: api.apiConnected,
+      hasH2H,
+      keyPoints: keyPoints,
+      tacticalAnalysis: {
+        home:
+          homeOdds < 2.0
+            ? "Approccio offensivo previsto per i favoriti"
+            : "Difesa compatta e ripartenze",
+        away:
+          awayOdds < 2.0
+            ? "Controllo del gioco atteso"
+            : "Atteggiamento prudente in trasferta",
+      },
+      predictions: {
+        risultatoEsatto: "Disponibile solo in Premium",
+        golTotali:
+          hasH2H && parseFloat(h2hData.avgGoals) > 2.5
+            ? "Over 2.5 Probabile"
+            : "Under 2.5 Probabile",
+        btts: hasH2H
+          ? `Sì (${h2hData.bttsPercentage}%)`
+          : "Dati non sufficienti",
+        corner: "Over 8.5 (Stima)",
+      },
+      valueRatings: {
+        casa: {
+          rating: homeOdds < 1.5 ? 9 : 6,
+          value: homeOdds > 2.2 ? "Alta" : "Bassa",
+        },
+        pareggio: { rating: 5, value: "Media" },
+        trasferta: {
+          rating: awayOdds < 1.5 ? 9 : 6,
+          value: awayOdds > 2.2 ? "Alta" : "Bassa",
+        },
+      },
+      aiPrediction: prediction, // Predizione calcolata
+      confidence: Math.round(confidence),
+    };
+  };
+
   const handleAnalyze = async (match) => {
     if (!auth.canUseAnalysis()) {
       addNotification(
@@ -110,16 +210,21 @@ const FootballStatsAI = () => {
     setAiAnalyzing(true);
     setLoadingH2h(true);
 
-    // Fetch H2H data
+    // Fetch H2H data REALE
     let h2hResult = null;
     if (api.apiConnected && match.homeId && match.awayId) {
-      const result = await api.fetchH2H(match.homeId, match.awayId);
-      if (result.success) {
-        h2hResult = result.data;
-        setH2hData(result.data);
+      try {
+        const result = await api.fetchH2H(match.homeId, match.awayId);
+        if (result.success) {
+          h2hResult = result.data;
+          setH2hData(result.data);
+        }
+      } catch (e) {
+        console.error("Errore fetch H2H", e);
       }
     }
 
+    // Fallback ai dati demo se non abbiamo risultati reali (o siamo in demo)
     if (!h2hResult) {
       h2hResult = getDemoH2hData();
       setH2hData(h2hResult);
@@ -127,53 +232,18 @@ const FootballStatsAI = () => {
 
     setLoadingH2h(false);
 
-    // Simulate AI analysis
+    // Simuliamo un breve ritardo per l'effetto "elaborazione"
     setTimeout(() => {
-      const analysis = generateAIAnalysis(match, h2hResult);
+      // Usiamo la nuova funzione SMART
+      const analysis = generateSmartAnalysis(match, h2hResult);
       setAiAnalysis(analysis);
       setAiAnalyzing(false);
       addNotification(
         "success",
         "Analisi Completata",
-        `Analisi per ${match.home} vs ${match.away}`
+        `Analisi generata per ${match.home} vs ${match.away}`
       );
-    }, 2000);
-  };
-
-  const generateAIAnalysis = (match, h2hData) => {
-    const hasH2H = h2hData && h2hData.totalMatches > 0;
-
-    return {
-      summary: `Analisi completa di ${match.home} vs ${match.away}`,
-      venue: match.venue || "Stadio",
-      realData: api.apiConnected,
-      hasH2H,
-      keyPoints: [
-        `${match.home} ha una forma eccellente con ${match.stats.homeForm}% di performance`,
-        hasH2H
-          ? `Negli ultimi ${h2hData.totalMatches} scontri: ${h2hData.team1WinPercentage}% vittorie casa`
-          : "Forma casalinga superiore",
-        "Statistiche H2H favorevoli alla squadra di casa",
-        "Momentum positivo nelle ultime 5 partite",
-      ],
-      tacticalAnalysis: {
-        home: "Sistema 3-5-2 con pressing alto e transizioni rapide",
-        away: "4-3-3 difensivo con contropiede veloce",
-      },
-      predictions: {
-        risultatoEsatto: "2-1",
-        golTotali: hasH2H
-          ? `Over 2.5 (${h2hData.over25Percentage}%)`
-          : "Over 2.5 (78%)",
-        btts: hasH2H ? `${h2hData.bttsPercentage}%` : "70%",
-        corner: "Over 9.5 (65%)",
-      },
-      valueRatings: {
-        casa: { rating: 8.5, value: "Alta" },
-        pareggio: { rating: 5.2, value: "Bassa" },
-        trasferta: { rating: 4.8, value: "Media" },
-      },
-    };
+    }, 1500);
   };
 
   const addNotification = (type, title, message) => {
